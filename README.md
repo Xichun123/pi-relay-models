@@ -22,10 +22,10 @@
 
 ## 安装
 
-从 GitHub 安装：
+从 npm 安装（推荐）：
 
 ```bash
-pi install git:github.com/Xichun123/pi-relay-models
+pi install npm:pi-relay-models
 ```
 
 安装完成后，在 pi 中运行：
@@ -36,10 +36,10 @@ pi install git:github.com/Xichun123/pi-relay-models
 
 不要同时保留手动安装的 `~/.pi/agent/extensions/relay-models/` 副本，否则工具和命令会重复注册。
 
-也可以临时试用而不写入设置：
+临时试用而不写入设置：
 
 ```bash
-pi -e git:github.com/Xichun123/pi-relay-models
+pi -e npm:pi-relay-models
 ```
 
 ## 使用

@@ -22,10 +22,10 @@ A mixed-protocol relay extension for [pi](https://github.com/earendil-works/pi-m
 
 ## Installation
 
-Install from GitHub:
+Install from npm (recommended):
 
 ```bash
-pi install git:github.com/Xichun123/pi-relay-models
+pi install npm:pi-relay-models
 ```
 
 Then reload pi:
@@ -36,10 +36,10 @@ Then reload pi:
 
 Do not keep a manually installed `~/.pi/agent/extensions/relay-models/` copy at the same time, because the tools and commands would be registered twice.
 
-To try the extension without changing settings:
+To try the package without changing settings:
 
 ```bash
-pi -e git:github.com/Xichun123/pi-relay-models
+pi -e npm:pi-relay-models
 ```
 
 ## Usage
