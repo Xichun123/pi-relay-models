@@ -1,0 +1,13 @@
+node_modules/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Local pi credentials and relay state must never be committed.
+auth.json
+relay-providers.json
+models-store.json
+models.json
