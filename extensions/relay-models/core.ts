@@ -83,6 +83,26 @@ export function validateProviderId(raw: string): string {
 	return id;
 }
 
+export function collectRemoteModelIds(remoteModelId?: string, remoteModelIds?: readonly string[]): string[] {
+	return [remoteModelId, ...(remoteModelIds ?? [])]
+		.filter((modelId): modelId is string => typeof modelId === "string")
+		.map((modelId) => modelId.trim())
+		.filter((modelId, index, values) => modelId.length > 0 && values.indexOf(modelId) === index);
+}
+
+export function updateExcludedModelIds(
+	excludedModels: readonly string[] | undefined,
+	modelIds: readonly string[],
+	excluded: boolean,
+): string[] {
+	const values = new Set(excludedModels ?? []);
+	for (const modelId of modelIds) {
+		if (excluded) values.add(modelId);
+		else values.delete(modelId);
+	}
+	return [...values].sort();
+}
+
 export function suggestProviderIdentity(rawBaseUrl: string, existingIds: ReadonlySet<string>): { id: string; name: string } {
 	const hostname = new URL(normalizeBaseUrl(rawBaseUrl)).hostname.toLowerCase();
 	const labels = hostname.split(".").filter(Boolean);

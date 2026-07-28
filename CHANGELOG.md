@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## 0.2.0 - 2026-07-28
+
+- Support batch `exclude` and `include` operations through the `remoteModelIds` tool parameter.
+- Use a root package extension entry so Pi displays the clean `pi-relay-models` label.
+
 ## 0.1.1 - 2026-07-26
 
 - Recommend npm as the installation source in the user documentation.

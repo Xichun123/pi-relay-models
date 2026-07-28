@@ -1,6 +1,6 @@
 {
   "name": "pi-relay-models",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "Mixed-protocol relay model discovery and metadata matching for pi",
   "license": "MIT",
@@ -31,7 +31,7 @@
   ],
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test extensions/relay-models/core.test.ts",
+    "test": "node --experimental-strip-types --test extensions/relay-models/*.test.ts",
     "validate": "npm run check && npm test"
   },
   "engines": {
@@ -51,7 +51,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/relay-models/index.ts"
+      "./extensions/index.ts"
     ]
   }
 }

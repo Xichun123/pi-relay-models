@@ -72,8 +72,10 @@ The extension also registers a `relay_models` AI tool with these actions:
 | `status` | Inspect provider, matching, and routing status |
 | `map` | Save a user-approved official metadata mapping |
 | `protocol` | Override one model's protocol |
-| `exclude` | Persistently exclude a model |
-| `include` | Restore an excluded model |
+| `exclude` | Persistently exclude one or more models |
+| `include` | Restore one or more excluded models |
+
+`exclude` and `include` accept `remoteModelId` for one model or a `remoteModelIds` array for a batch. A batch saves the configuration and refreshes the model list only once; the existing single-model parameter remains compatible.
 
 `map`, `protocol`, and `exclude` are persistent changes. The tool instructions require explicit user approval before invoking them.
 

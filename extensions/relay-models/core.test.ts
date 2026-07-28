@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
+	collectRemoteModelIds,
 	fetchModelIds,
 	getModelsEndpointCandidates,
 	materializeRelayModels,
@@ -13,6 +14,7 @@ import {
 	suggestOfficialCandidates,
 	suggestProviderIdentity,
 	type RelayConfig,
+	updateExcludedModelIds,
 } from "./core.ts";
 import { SPOOF_HEADER_PROFILES } from "./header-profiles.ts";
 
@@ -205,6 +207,16 @@ test("applies a user-approved per-model protocol override", () => {
 		[official],
 	);
 	assert.equal(result.models[0]?.api, "openai-completions");
+});
+
+test("normalizes batch exclusion targets and updates them together", () => {
+	const modelIds = collectRemoteModelIds(" first ", ["second", "first", " ", "third"]);
+	assert.deepEqual(modelIds, ["first", "second", "third"]);
+	assert.deepEqual(updateExcludedModelIds(["existing"], modelIds, true), ["existing", "first", "second", "third"]);
+	assert.deepEqual(updateExcludedModelIds(["existing", "first", "second", "third"], ["first", "third"], false), [
+		"existing",
+		"second",
+	]);
 });
 
 test("persistently excludes configured relay model IDs during materialization", () => {

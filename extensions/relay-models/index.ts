@@ -16,6 +16,7 @@ import {
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+	collectRemoteModelIds,
 	fetchModelIds,
 	materializeRelayModels,
 	normalizeBaseUrl,
@@ -25,6 +26,7 @@ import {
 	type RelayConfig,
 	type RelayModelResponse,
 	type RelayProtocol,
+	updateExcludedModelIds,
 	validateProviderId,
 } from "./core.ts";
 import { SPOOF_HEADER_PROFILES } from "./header-profiles.ts";
@@ -342,24 +344,30 @@ async function setRelayModelProtocol(
 
 async function setRelayModelExclusion(
 	pi: ExtensionAPI,
-	params: { providerId?: string; remoteModelId?: string },
+	params: { providerId?: string; remoteModelId?: string; remoteModelIds?: string[] },
 	excluded: boolean,
 	ctx: Pick<ExtensionCommandContext, "modelRegistry">,
 ) {
-	const { providerId, remoteModelId } = params;
-	if (!providerId || !remoteModelId) throw new Error("providerId and remoteModelId are required");
+	const { providerId } = params;
+	const modelIds = collectRemoteModelIds(params.remoteModelId, params.remoteModelIds);
+	if (!providerId || modelIds.length === 0) {
+		throw new Error("providerId and at least one remoteModelId or remoteModelIds entry are required");
+	}
 	const current = configFile.providers.find((provider) => provider.id === providerId);
 	if (!current) throw new Error(`Unknown relay provider: ${providerId}`);
-	const values = new Set(current.excludedModels ?? []);
-	if (excluded) values.add(remoteModelId);
-	else values.delete(remoteModelId);
+	const values = updateExcludedModelIds(current.excludedModels, modelIds, excluded);
 	const config: RelayConfig = {
 		...current,
-		...(values.size > 0 ? { excludedModels: [...values].sort() } : { excludedModels: undefined }),
+		...(values.length > 0 ? { excludedModels: values } : { excludedModels: undefined }),
 	};
 	await saveAndRegister(pi, config);
 	await ctx.modelRegistry.refresh();
-	return { model: `${providerId}/${remoteModelId}`, excluded, report: relayReports(providerId)[0] };
+	const targets = modelIds.map((modelId) => `${providerId}/${modelId}`);
+	return {
+		...(targets.length === 1 ? { model: targets[0] } : { models: targets }),
+		excluded,
+		report: relayReports(providerId)[0],
+	};
 }
 
 async function addRelay(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
@@ -480,7 +488,7 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 		name: "relay_models",
 		label: "Relay Models",
 		description:
-			"Configure mixed-protocol relay providers, sync model IDs, inspect unmatched IDs, save user-approved mappings, override a model protocol, and persistently exclude/include relay models. This tool never accepts or exposes API keys; authentication must use /login.",
+			"Configure mixed-protocol relay providers, sync model IDs, inspect unmatched IDs, save user-approved mappings, override a model protocol, and persistently exclude/include one or more relay models. This tool never accepts or exposes API keys; authentication must use /login.",
 		promptSnippet: "Configure and review OpenAI/Anthropic relay model providers without exposing API keys",
 		promptGuidelines: [
 			"Use relay_models when the user asks to add or inspect an OpenAI/Anthropic-compatible relay provider.",
@@ -497,7 +505,14 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 			),
 			providerId: Type.Optional(Type.String()),
 			displayName: Type.Optional(Type.String()),
-			remoteModelId: Type.Optional(Type.String()),
+			remoteModelId: Type.Optional(Type.String({ description: "Single remote model ID" })),
+			remoteModelIds: Type.Optional(
+				Type.Array(Type.String(), {
+					description: "Remote model IDs to exclude/include in one operation",
+					minItems: 1,
+					uniqueItems: true,
+				}),
+			),
 			officialProvider: Type.Optional(Type.String()),
 			officialModelId: Type.Optional(Type.String()),
 		}),

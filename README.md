@@ -72,8 +72,10 @@ pi -e npm:pi-relay-models
 | `status` | 查看供应商、匹配和路由状态 |
 | `map` | 保存人工确认的官方元信息映射 |
 | `protocol` | 覆盖单个模型的协议 |
-| `exclude` | 持久排除模型 |
-| `include` | 恢复已排除模型 |
+| `exclude` | 持久排除一个或多个模型 |
+| `include` | 恢复一个或多个已排除模型 |
+
+`exclude` 和 `include` 可使用 `remoteModelId` 操作单个模型，或使用 `remoteModelIds` 数组批量操作。批量操作只保存一次配置并刷新一次模型列表；原有单模型参数保持兼容。
 
 `map`、`protocol` 和 `exclude` 属于持久配置变更，AI 工具说明要求在调用前取得用户明确确认。
 
