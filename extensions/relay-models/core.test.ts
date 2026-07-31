@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
+	collectRelayModelMappings,
 	collectRemoteModelIds,
 	fetchModelIds,
 	getModelsEndpointCandidates,
@@ -207,6 +208,54 @@ test("applies a user-approved per-model protocol override", () => {
 		[official],
 	);
 	assert.equal(result.models[0]?.api, "openai-completions");
+});
+
+test("normalizes batch mappings and applies the shared protocol once", () => {
+	assert.deepEqual(
+		collectRelayModelMappings(
+			undefined,
+			[
+				{ remoteModelId: " first ", officialProvider: " openai ", officialModelId: " gpt-first " },
+				{
+					remoteModelId: "second",
+					officialProvider: "anthropic",
+					officialModelId: "claude-second",
+					protocol: "anthropic-messages",
+				},
+			],
+			"openai-responses",
+		),
+		[
+			{
+				remoteModelId: "first",
+				officialProvider: "openai",
+				officialModelId: "gpt-first",
+				protocol: "openai-responses",
+			},
+			{
+				remoteModelId: "second",
+				officialProvider: "anthropic",
+				officialModelId: "claude-second",
+				protocol: "anthropic-messages",
+			},
+		],
+	);
+});
+
+test("rejects incomplete or duplicate batch mappings before mutation", () => {
+	assert.throws(
+		() => collectRelayModelMappings({ remoteModelId: "only-id" }, undefined),
+		/officialProvider, and officialModelId are required/u,
+	);
+	assert.throws(
+		() =>
+			collectRelayModelMappings(undefined, [
+				{ remoteModelId: "same", officialProvider: "openai", officialModelId: "gpt-one" },
+				{ remoteModelId: " same ", officialProvider: "openai", officialModelId: "gpt-two" },
+			]),
+		/Duplicate remote model ID: same/u,
+	);
+	assert.throws(() => collectRelayModelMappings(undefined, undefined), /At least one model mapping is required/u);
 });
 
 test("normalizes batch exclusion targets and updates them together", () => {

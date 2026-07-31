@@ -77,7 +77,32 @@ pi -e npm:pi-relay-models
 
 `exclude` 和 `include` 可使用 `remoteModelId` 操作单个模型，或使用 `remoteModelIds` 数组批量操作。批量操作只保存一次配置并刷新一次模型列表；原有单模型参数保持兼容。
 
-`map`、`protocol` 和 `exclude` 属于持久配置变更，AI 工具说明要求在调用前取得用户明确确认。
+`map` 既支持原有的单模型参数，也支持通过 `mappings` 数组原子化批量映射。顶层 `protocol` 会作为整批默认协议，每个映射也可以单独覆盖：
+
+```json
+{
+  "action": "map",
+  "providerId": "relay-example",
+  "protocol": "openai-completions",
+  "mappings": [
+    {
+      "remoteModelId": "model-alias-a",
+      "officialProvider": "openai",
+      "officialModelId": "gpt-5.4"
+    },
+    {
+      "remoteModelId": "model-alias-b",
+      "officialProvider": "anthropic",
+      "officialModelId": "claude-sonnet-4-6",
+      "protocol": "anthropic-messages"
+    }
+  ]
+}
+```
+
+扩展会先验证整批映射和所有官方模型引用；任一项无效时不会写入配置。验证通过后只保存一次并刷新一次。
+
+`map`、`protocol` 和 `exclude` 属于持久配置变更，AI 工具说明要求在调用前展示所有变更并取得用户明确确认。
 
 ## 混合协议路由
 

@@ -77,7 +77,32 @@ The extension also registers a `relay_models` AI tool with these actions:
 
 `exclude` and `include` accept `remoteModelId` for one model or a `remoteModelIds` array for a batch. A batch saves the configuration and refreshes the model list only once; the existing single-model parameter remains compatible.
 
-`map`, `protocol`, and `exclude` are persistent changes. The tool instructions require explicit user approval before invoking them.
+`map` supports both the existing single-model fields and an atomic `mappings` batch. A top-level `protocol` acts as the batch default, while each mapping may override it:
+
+```json
+{
+  "action": "map",
+  "providerId": "relay-example",
+  "protocol": "openai-completions",
+  "mappings": [
+    {
+      "remoteModelId": "model-alias-a",
+      "officialProvider": "openai",
+      "officialModelId": "gpt-5.4"
+    },
+    {
+      "remoteModelId": "model-alias-b",
+      "officialProvider": "anthropic",
+      "officialModelId": "claude-sonnet-4-6",
+      "protocol": "anthropic-messages"
+    }
+  ]
+}
+```
+
+The extension validates the entire batch and every official model reference before mutation. If any entry is invalid, nothing is saved; otherwise the configuration is saved and the model list is refreshed only once.
+
+`map`, `protocol`, and `exclude` are persistent changes. The tool instructions require every proposed change to be shown and explicitly approved before invocation.
 
 ## Mixed-protocol routing
 

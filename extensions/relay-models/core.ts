@@ -7,6 +7,20 @@ export interface OfficialModelRef {
 	id: string;
 }
 
+export interface RelayModelMappingInput {
+	remoteModelId?: string;
+	officialProvider?: string;
+	officialModelId?: string;
+	protocol?: RelayProtocol;
+}
+
+export interface RelayModelMapping {
+	remoteModelId: string;
+	officialProvider: string;
+	officialModelId: string;
+	protocol?: RelayProtocol;
+}
+
 export interface RelayConfig {
 	id: string;
 	name: string;
@@ -88,6 +102,40 @@ export function collectRemoteModelIds(remoteModelId?: string, remoteModelIds?: r
 		.filter((modelId): modelId is string => typeof modelId === "string")
 		.map((modelId) => modelId.trim())
 		.filter((modelId, index, values) => modelId.length > 0 && values.indexOf(modelId) === index);
+}
+
+export function collectRelayModelMappings(
+	single: RelayModelMappingInput | undefined,
+	batch: readonly RelayModelMappingInput[] | undefined,
+	defaultProtocol?: RelayProtocol,
+): RelayModelMapping[] {
+	const hasSingle = Boolean(
+		single &&
+			(single.remoteModelId !== undefined || single.officialProvider !== undefined || single.officialModelId !== undefined),
+	);
+	const inputs = [...(hasSingle && single ? [single] : []), ...(batch ?? [])];
+	if (inputs.length === 0) throw new Error("At least one model mapping is required");
+
+	const seen = new Set<string>();
+	return inputs.map((input, index) => {
+		const remoteModelId = input.remoteModelId?.trim();
+		const officialProvider = input.officialProvider?.trim();
+		const officialModelId = input.officialModelId?.trim();
+		if (!remoteModelId || !officialProvider || !officialModelId) {
+			throw new Error(
+				`remoteModelId, officialProvider, and officialModelId are required for mapping ${index + 1}`,
+			);
+		}
+		if (seen.has(remoteModelId)) throw new Error(`Duplicate remote model ID: ${remoteModelId}`);
+		seen.add(remoteModelId);
+		const protocol = input.protocol ?? defaultProtocol;
+		return {
+			remoteModelId,
+			officialProvider,
+			officialModelId,
+			...(protocol ? { protocol } : {}),
+		};
+	});
 }
 
 export function updateExcludedModelIds(

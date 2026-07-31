@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+- Support atomic batch `map` operations through the `mappings` tool parameter, with one validation, configuration save, and model refresh per batch.
+- Allow a top-level mapping protocol default with optional per-entry overrides while preserving the existing single-model API.
+
 ## 0.2.0 - 2026-07-28
 
 - Support batch `exclude` and `include` operations through the `remoteModelIds` tool parameter.

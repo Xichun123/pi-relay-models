@@ -16,6 +16,7 @@ import {
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+	collectRelayModelMappings,
 	collectRemoteModelIds,
 	fetchModelIds,
 	materializeRelayModels,
@@ -281,7 +282,7 @@ async function addRelayForAi(
 	};
 }
 
-async function mapRelayModel(
+async function mapRelayModels(
 	pi: ExtensionAPI,
 	params: {
 		providerId?: string;
@@ -289,37 +290,71 @@ async function mapRelayModel(
 		officialProvider?: string;
 		officialModelId?: string;
 		protocol?: RelayProtocol;
+		mappings?: Array<{
+			remoteModelId: string;
+			officialProvider: string;
+			officialModelId: string;
+			protocol?: RelayProtocol;
+		}>;
 	},
 	ctx: Pick<ExtensionCommandContext, "modelRegistry">,
 ) {
-	const { providerId, remoteModelId, officialProvider, officialModelId } = params;
-	if (!providerId || !remoteModelId || !officialProvider || !officialModelId) {
-		throw new Error("providerId, remoteModelId, officialProvider, and officialModelId are required for action=map");
-	}
-	refreshOfficialCatalog(ctx);
-	const official = officialCatalog.find((model) => model.provider === officialProvider && model.id === officialModelId);
-	if (!official) throw new Error(`Official model not found: ${officialProvider}/${officialModelId}`);
+	const { providerId } = params;
+	if (!providerId) throw new Error("providerId is required for action=map");
+	const mappings = collectRelayModelMappings(
+		{
+			remoteModelId: params.remoteModelId,
+			officialProvider: params.officialProvider,
+			officialModelId: params.officialModelId,
+			protocol: params.protocol,
+		},
+		params.mappings,
+		params.protocol,
+	);
 	const current = configFile.providers.find((provider) => provider.id === providerId);
 	if (!current) throw new Error(`Unknown relay provider: ${providerId}`);
 
+	refreshOfficialCatalog(ctx);
+	const officialReferences = new Set(officialCatalog.map((model) => `${model.provider}/${model.id}`));
+	const missing = mappings
+		.map((mapping) => `${mapping.officialProvider}/${mapping.officialModelId}`)
+		.filter((reference) => !officialReferences.has(reference));
+	if (missing.length === 1) throw new Error(`Official model not found: ${missing[0]}`);
+	if (missing.length > 1) throw new Error(`Official models not found: ${missing.join(", ")}`);
+
+	const modelMappings = { ...(current.modelMappings ?? {}) };
+	const protocolOverrides = { ...(current.protocolOverrides ?? {}) };
+	for (const mapping of mappings) {
+		modelMappings[mapping.remoteModelId] = {
+			provider: mapping.officialProvider,
+			id: mapping.officialModelId,
+		};
+		if (mapping.protocol) protocolOverrides[mapping.remoteModelId] = mapping.protocol;
+	}
 	const config: RelayConfig = {
 		...current,
-		modelMappings: {
-			...(current.modelMappings ?? {}),
-			[remoteModelId]: { provider: officialProvider, id: officialModelId },
-		},
-		...(params.protocol
-			? { protocolOverrides: { ...(current.protocolOverrides ?? {}), [remoteModelId]: params.protocol } }
-			: {}),
+		modelMappings,
+		...(Object.keys(protocolOverrides).length > 0 ? { protocolOverrides } : {}),
 	};
 	await saveAndRegister(pi, config);
 	await ctx.modelRegistry.refresh();
-	return {
-		mapped: `${providerId}/${remoteModelId}`,
-		metadataSource: `${officialProvider}/${officialModelId}`,
-		protocolOverride: params.protocol,
-		report: relayReports(providerId)[0],
-	};
+
+	const mapped = mappings.map((mapping) => ({
+		model: `${providerId}/${mapping.remoteModelId}`,
+		metadataSource: `${mapping.officialProvider}/${mapping.officialModelId}`,
+		protocolOverride: mapping.protocol,
+	}));
+	const report = relayReports(providerId)[0];
+	if (!params.mappings && mapped.length === 1) {
+		const [entry] = mapped;
+		return {
+			mapped: entry!.model,
+			metadataSource: entry!.metadataSource,
+			protocolOverride: entry!.protocolOverride,
+			report,
+		};
+	}
+	return { mapped, count: mapped.length, report };
 }
 
 async function setRelayModelProtocol(
@@ -488,19 +523,19 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 		name: "relay_models",
 		label: "Relay Models",
 		description:
-			"Configure mixed-protocol relay providers, sync model IDs, inspect unmatched IDs, save user-approved mappings, override a model protocol, and persistently exclude/include one or more relay models. This tool never accepts or exposes API keys; authentication must use /login.",
+			"Configure mixed-protocol relay providers, sync model IDs, inspect unmatched IDs, atomically save one or more user-approved mappings, override a model protocol, and persistently exclude/include one or more relay models. This tool never accepts or exposes API keys; authentication must use /login.",
 		promptSnippet: "Configure and review OpenAI/Anthropic relay model providers without exposing API keys",
 		promptGuidelines: [
 			"Use relay_models when the user asks to add or inspect an OpenAI/Anthropic-compatible relay provider.",
 			"After relay_models add, tell the user to run the returned /login command; never ask the user to paste an API key into chat.",
-			"Before calling relay_models with action=map, action=protocol, or action=exclude, show the proposed change and obtain explicit user approval.",
+			"Before calling relay_models with action=map, action=protocol, or action=exclude, show every proposed change and obtain explicit user approval.",
 		],
 		parameters: Type.Object({
 			action: StringEnum(["add", "sync", "status", "map", "protocol", "exclude", "include"] as const),
 			baseUrl: Type.Optional(Type.String({ description: "Relay Base URL for action=add" })),
 			protocol: Type.Optional(
 				StringEnum(["openai-completions", "openai-responses", "anthropic-messages"] as const, {
-					description: "Optional unmatched-model fallback for add, or explicit per-model override for map/protocol",
+					description: "Fallback for add, override for protocol/single map, or default for a mappings batch",
 				}),
 			),
 			providerId: Type.Optional(Type.String()),
@@ -515,6 +550,23 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 			),
 			officialProvider: Type.Optional(Type.String()),
 			officialModelId: Type.Optional(Type.String()),
+			mappings: Type.Optional(
+				Type.Array(
+					Type.Object({
+						remoteModelId: Type.String(),
+						officialProvider: Type.String(),
+						officialModelId: Type.String(),
+						protocol: Type.Optional(
+							StringEnum(["openai-completions", "openai-responses", "anthropic-messages"] as const),
+						),
+					}),
+					{
+						description:
+							"User-approved mappings to validate and save atomically; top-level protocol is the batch default",
+						minItems: 1,
+					},
+				),
+			),
 		}),
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			if (signal?.aborted) throw new Error("Relay operation cancelled");
@@ -530,7 +582,7 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 					result = relayReports(params.providerId);
 					break;
 				case "map":
-					result = await mapRelayModel(pi, params, ctx);
+					result = await mapRelayModels(pi, params, ctx);
 					break;
 				case "protocol":
 					result = await setRelayModelProtocol(pi, params, ctx);
