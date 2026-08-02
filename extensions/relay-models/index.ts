@@ -31,6 +31,7 @@ import {
 	validateProviderId,
 } from "./core.ts";
 import { SPOOF_HEADER_PROFILES } from "./header-profiles.ts";
+import { deleteJsonRecordKey } from "./state.ts";
 
 interface ConfigFile {
 	version: 1;
@@ -45,7 +46,10 @@ interface SyncStatus {
 	updatedAt: number;
 }
 
-const CONFIG_PATH = join(getAgentDir(), "relay-providers.json");
+const AGENT_DIR = getAgentDir();
+const CONFIG_PATH = join(AGENT_DIR, "relay-providers.json");
+const AUTH_PATH = join(AGENT_DIR, "auth.json");
+const MODELS_STORE_PATH = join(AGENT_DIR, "models-store.json");
 const builtinProviderNames = getProviders();
 const builtinProviderIds: ReadonlySet<string> = new Set(builtinProviderNames);
 let officialCatalog: Model<Api>[] = builtinProviderNames.flatMap((provider) => getModels(provider) as Model<Api>[]);
@@ -197,6 +201,77 @@ async function saveAndRegister(pi: ExtensionAPI, config: RelayConfig): Promise<v
 	await saveConfig(configFile);
 	if (replacing) pi.unregisterProvider(config.id);
 	registerConfig(pi, config);
+}
+
+interface InternalModelRuntime {
+	logout?(providerId: string): Promise<void>;
+	models?: {
+		modelsStore?: {
+			delete(providerId: string): Promise<void>;
+		};
+	};
+}
+
+// Pi 0.82.1 does not expose credential/cache deletion on ModelRegistry. Prefer
+// the live runtime capability so its in-memory state stays coherent, then fall
+// back to the same persisted files when that internal capability is unavailable.
+function getInternalModelRuntime(
+	ctx: Pick<ExtensionCommandContext, "modelRegistry">,
+): InternalModelRuntime | undefined {
+	return (ctx.modelRegistry as unknown as { runtime?: InternalModelRuntime }).runtime;
+}
+
+async function cleanupRelayProviderState(
+	providerId: string,
+	ctx: Pick<ExtensionCommandContext, "modelRegistry">,
+): Promise<{ credential: "runtime" | "file"; modelCache: "runtime" | "file" }> {
+	const runtime = getInternalModelRuntime(ctx);
+	let credential: "runtime" | "file";
+	if (runtime?.logout) {
+		await runtime.logout(providerId);
+		credential = "runtime";
+	} else {
+		await deleteJsonRecordKey(AUTH_PATH, providerId);
+		credential = "file";
+	}
+
+	let modelCache: "runtime" | "file";
+	if (runtime?.models?.modelsStore) {
+		await runtime.models.modelsStore.delete(providerId);
+		modelCache = "runtime";
+	} else {
+		await deleteJsonRecordKey(MODELS_STORE_PATH, providerId);
+		modelCache = "file";
+	}
+	return { credential, modelCache };
+}
+
+async function removeRelayForAi(
+	pi: ExtensionAPI,
+	params: { providerId?: string },
+	ctx: Pick<ExtensionCommandContext, "modelRegistry">,
+) {
+	if (!params.providerId) throw new Error("providerId is required for action=remove");
+	const providerId = validateProviderId(params.providerId);
+	const current = configFile.providers.find((provider) => provider.id === providerId);
+	if (!current) throw new Error(`Unknown relay provider: ${providerId}`);
+
+	const next: ConfigFile = {
+		version: 1,
+		providers: configFile.providers.filter((provider) => provider.id !== providerId),
+	};
+	await saveConfig(next);
+	configFile = next;
+	pi.unregisterProvider(providerId);
+	syncStatuses.delete(providerId);
+	const cleanup = await cleanupRelayProviderState(providerId, ctx);
+	await ctx.modelRegistry.refresh();
+	return {
+		removed: providerId,
+		displayName: current.name,
+		credentialCleanup: cleanup.credential,
+		modelCacheCleanup: cleanup.modelCache,
+	};
 }
 
 function refreshOfficialCatalog(ctx: Pick<ExtensionCommandContext, "modelRegistry">): void {
@@ -460,6 +535,49 @@ async function addRelay(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise
 	ctx.ui.setEditorText(`/login ${id}`);
 }
 
+async function removeRelay(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
+	if (!ctx.hasUI) {
+		ctx.ui.notify("/relay-remove requires interactive or RPC UI mode", "error");
+		return;
+	}
+	if (configFile.providers.length === 0) {
+		ctx.ui.notify("No relay providers configured.", "info");
+		return;
+	}
+
+	let providerId = args.trim();
+	if (!providerId) {
+		const selected = await ctx.ui.select(
+			"Remove relay provider",
+			configFile.providers.map((provider) => provider.id),
+		);
+		if (!selected) return;
+		providerId = selected;
+	}
+
+	let normalizedId: string;
+	try {
+		normalizedId = validateProviderId(providerId);
+	} catch (error) {
+		ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+		return;
+	}
+	const current = configFile.providers.find((provider) => provider.id === normalizedId);
+	if (!current) {
+		ctx.ui.notify(`Unknown relay provider: ${normalizedId}`, "error");
+		return;
+	}
+
+	const confirmed = await ctx.ui.confirm(
+		"Remove relay provider?",
+		`${current.name} (${current.id})\nThis also removes its stored credential and model cache.`,
+	);
+	if (!confirmed) return;
+
+	await removeRelayForAi(pi, { providerId: normalizedId }, ctx);
+	ctx.ui.notify(`Removed ${current.id}, its credential, and its model cache.`, "info");
+}
+
 function listRelays(ctx: ExtensionCommandContext): void {
 	if (configFile.providers.length === 0) {
 		ctx.ui.notify("No relay providers configured. Run /relay-add.", "info");
@@ -523,22 +641,22 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 		name: "relay_models",
 		label: "Relay Models",
 		description:
-			"Configure mixed-protocol relay providers, sync model IDs, inspect unmatched IDs, atomically save one or more user-approved mappings, override a model protocol, and persistently exclude/include one or more relay models. This tool never accepts or exposes API keys; authentication must use /login.",
+			"Configure mixed-protocol relay providers, remove providers and their stored state, sync model IDs, inspect unmatched IDs, atomically save one or more user-approved mappings, override a model protocol, and persistently exclude/include one or more relay models. This tool never accepts or exposes API keys; authentication must use /login.",
 		promptSnippet: "Configure and review OpenAI/Anthropic relay model providers without exposing API keys",
 		promptGuidelines: [
-			"Use relay_models when the user asks to add or inspect an OpenAI/Anthropic-compatible relay provider.",
+			"Use relay_models when the user asks to add, remove, or inspect an OpenAI/Anthropic-compatible relay provider.",
 			"After relay_models add, tell the user to run the returned /login command; never ask the user to paste an API key into chat.",
-			"Before calling relay_models with action=map, action=protocol, or action=exclude, show every proposed change and obtain explicit user approval.",
+			"Before calling relay_models with action=map, action=protocol, action=exclude, or action=remove, show every proposed change and obtain explicit user approval.",
 		],
 		parameters: Type.Object({
-			action: StringEnum(["add", "sync", "status", "map", "protocol", "exclude", "include"] as const),
+			action: StringEnum(["add", "remove", "sync", "status", "map", "protocol", "exclude", "include"] as const),
 			baseUrl: Type.Optional(Type.String({ description: "Relay Base URL for action=add" })),
 			protocol: Type.Optional(
 				StringEnum(["openai-completions", "openai-responses", "anthropic-messages"] as const, {
 					description: "Fallback for add, override for protocol/single map, or default for a mappings batch",
 				}),
 			),
-			providerId: Type.Optional(Type.String()),
+			providerId: Type.Optional(Type.String({ description: "Relay provider ID for provider-scoped actions" })),
 			displayName: Type.Optional(Type.String()),
 			remoteModelId: Type.Optional(Type.String({ description: "Single remote model ID" })),
 			remoteModelIds: Type.Optional(
@@ -576,6 +694,9 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 				case "add":
 					result = await addRelayForAi(pi, params, ctx);
 					break;
+				case "remove":
+					result = await removeRelayForAi(pi, params, ctx);
+					break;
 				case "sync":
 					refreshOfficialCatalog(ctx);
 					await ctx.modelRegistry.refresh();
@@ -606,6 +727,16 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 	pi.registerCommand("relay-add", {
 		description: "Add or update a relay provider",
 		handler: async (_args, ctx) => addRelay(pi, ctx),
+	});
+	pi.registerCommand("relay-remove", {
+		description: "Remove a relay provider and its stored state",
+		getArgumentCompletions: (prefix) => {
+			const matches = configFile.providers
+				.filter((provider) => provider.id.startsWith(prefix))
+				.map((provider) => ({ value: provider.id, label: provider.id, description: provider.name }));
+			return matches.length > 0 ? matches : null;
+		},
+		handler: async (args, ctx) => removeRelay(pi, args, ctx),
 	});
 	pi.registerCommand("relay-sync", {
 		description: "Refresh relay models and match pi metadata",

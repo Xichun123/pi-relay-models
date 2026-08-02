@@ -1,6 +1,6 @@
 {
   "name": "pi-relay-models",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Mixed-protocol relay model discovery and metadata matching for pi",
   "license": "MIT",

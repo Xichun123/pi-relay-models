@@ -63,11 +63,20 @@ pi -e npm:pi-relay-models
 /relay-list
 ```
 
-也可以直接让 AI 添加、同步或检查中转站。扩展注册了 `relay_models` 工具，支持：
+删除中转站及其凭据和模型缓存：
+
+```text
+/relay-remove <provider-id>
+```
+
+交互模式下省略 Provider ID 时可从列表中选择；执行删除前会要求确认。
+
+也可以直接让 AI 添加、删除、同步或检查中转站。扩展注册了 `relay_models` 工具，支持：
 
 | 操作 | 作用 |
 | --- | --- |
 | `add` | 添加或更新中转站 Provider |
+| `remove` | 删除中转站、运行时注册、凭据和模型缓存 |
 | `sync` | 刷新模型并匹配官方元信息 |
 | `status` | 查看供应商、匹配和路由状态 |
 | `map` | 保存人工确认的官方元信息映射 |
@@ -102,7 +111,7 @@ pi -e npm:pi-relay-models
 
 扩展会先验证整批映射和所有官方模型引用；任一项无效时不会写入配置。验证通过后只保存一次并刷新一次。
 
-`map`、`protocol` 和 `exclude` 属于持久配置变更，AI 工具说明要求在调用前展示所有变更并取得用户明确确认。
+`map`、`protocol`、`exclude` 和 `remove` 属于持久配置变更，AI 工具说明要求在调用前展示所有变更并取得用户明确确认。`remove` 需要 `providerId`，并且只能删除由本扩展管理的中转站。
 
 ## 混合协议路由
 

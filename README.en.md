@@ -63,11 +63,20 @@ Enter the API key only in `/login`'s secret prompt. Never send it in chat. After
 /relay-list
 ```
 
+Remove a relay provider together with its credential and model cache:
+
+```text
+/relay-remove <provider-id>
+```
+
+In interactive mode, omit the provider ID to select one from a list. The command asks for confirmation before removal.
+
 The extension also registers a `relay_models` AI tool with these actions:
 
 | Action | Purpose |
 | --- | --- |
 | `add` | Add or update a relay provider |
+| `remove` | Remove a relay, its runtime registration, credential, and model cache |
 | `sync` | Refresh models and match official metadata |
 | `status` | Inspect provider, matching, and routing status |
 | `map` | Save a user-approved official metadata mapping |
@@ -102,7 +111,7 @@ The extension also registers a `relay_models` AI tool with these actions:
 
 The extension validates the entire batch and every official model reference before mutation. If any entry is invalid, nothing is saved; otherwise the configuration is saved and the model list is refreshed only once.
 
-`map`, `protocol`, and `exclude` are persistent changes. The tool instructions require every proposed change to be shown and explicitly approved before invocation.
+`map`, `protocol`, `exclude`, and `remove` are persistent changes. The tool instructions require every proposed change to be shown and explicitly approved before invocation. `remove` requires `providerId` and only removes relay providers managed by this extension.
 
 ## Mixed-protocol routing
 

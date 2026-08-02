@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.3.0 - 2026-08-02
+
+- Add `relay_models action=remove` and `/relay-remove` to unregister a managed relay and clean up its persisted credential and model cache.
 - Support atomic batch `map` operations through the `mappings` tool parameter, with one validation, configuration save, and model refresh per batch.
 - Allow a top-level mapping protocol default with optional per-entry overrides while preserving the existing single-model API.
 
