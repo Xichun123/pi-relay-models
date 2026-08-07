@@ -13,7 +13,8 @@ import {
 	type Provider,
 	StringEnum,
 } from "@earendil-works/pi-ai/compat";
-import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, keyHint, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
 	collectRelayModelMappings,
@@ -290,6 +291,17 @@ function protocolDescription(protocol: RelayProtocol): string {
 	}
 }
 
+const RELAY_TOOL_COLLAPSED_LINES = 8;
+
+function relayToolResultPreview(fullText: string, expanded: boolean): { text: string; remaining: number } {
+	const lines = fullText.replace(/\r/gu, "").split("\n");
+	if (expanded || lines.length <= RELAY_TOOL_COLLAPSED_LINES) return { text: lines.join("\n"), remaining: 0 };
+	return {
+		text: lines.slice(0, RELAY_TOOL_COLLAPSED_LINES).join("\n"),
+		remaining: lines.length - RELAY_TOOL_COLLAPSED_LINES,
+	};
+}
+
 function relayReports(providerId?: string) {
 	return configFile.providers
 		.filter((config) => !providerId || config.id === providerId)
@@ -430,6 +442,66 @@ async function mapRelayModels(
 		};
 	}
 	return { mapped, count: mapped.length, report };
+}
+
+async function unmapRelayModels(
+	pi: ExtensionAPI,
+	params: { providerId?: string; remoteModelId?: string; remoteModelIds?: string[] },
+	ctx: Pick<ExtensionCommandContext, "modelRegistry">,
+) {
+	const { providerId } = params;
+	const modelIds = collectRemoteModelIds(params.remoteModelId, params.remoteModelIds);
+	if (!providerId || modelIds.length === 0) {
+		throw new Error("providerId and at least one remoteModelId or remoteModelIds entry are required for action=unmap");
+	}
+	const current = configFile.providers.find((provider) => provider.id === providerId);
+	if (!current) throw new Error(`Unknown relay provider: ${providerId}`);
+
+	const modelMappings = { ...(current.modelMappings ?? {}) };
+	const unmapped = modelIds.filter((modelId) => Object.hasOwn(modelMappings, modelId));
+	for (const modelId of unmapped) delete modelMappings[modelId];
+	const config: RelayConfig = {
+		...current,
+		...(Object.keys(modelMappings).length > 0 ? { modelMappings } : { modelMappings: undefined }),
+	};
+	await saveAndRegister(pi, config);
+	await ctx.modelRegistry.refresh();
+	const targets = unmapped.map((modelId) => `${providerId}/${modelId}`);
+	return {
+		...(targets.length === 1 ? { unmapped: targets[0] } : { unmapped: targets }),
+		count: targets.length,
+		report: relayReports(providerId)[0],
+	};
+}
+
+async function clearRelayProtocols(
+	pi: ExtensionAPI,
+	params: { providerId?: string; remoteModelId?: string; remoteModelIds?: string[] },
+	ctx: Pick<ExtensionCommandContext, "modelRegistry">,
+) {
+	const { providerId } = params;
+	const modelIds = collectRemoteModelIds(params.remoteModelId, params.remoteModelIds);
+	if (!providerId || modelIds.length === 0) {
+		throw new Error("providerId and at least one remoteModelId or remoteModelIds entry are required for action=clear");
+	}
+	const current = configFile.providers.find((provider) => provider.id === providerId);
+	if (!current) throw new Error(`Unknown relay provider: ${providerId}`);
+
+	const protocolOverrides = { ...(current.protocolOverrides ?? {}) };
+	const cleared = modelIds.filter((modelId) => Object.hasOwn(protocolOverrides, modelId));
+	for (const modelId of cleared) delete protocolOverrides[modelId];
+	const config: RelayConfig = {
+		...current,
+		...(Object.keys(protocolOverrides).length > 0 ? { protocolOverrides } : { protocolOverrides: undefined }),
+	};
+	await saveAndRegister(pi, config);
+	await ctx.modelRegistry.refresh();
+	const targets = cleared.map((modelId) => `${providerId}/${modelId}`);
+	return {
+		...(targets.length === 1 ? { cleared: targets[0] } : { cleared: targets }),
+		count: targets.length,
+		report: relayReports(providerId)[0],
+	};
 }
 
 async function setRelayModelProtocol(
@@ -641,15 +713,28 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 		name: "relay_models",
 		label: "Relay Models",
 		description:
-			"Configure mixed-protocol relay providers, remove providers and their stored state, sync model IDs, inspect unmatched IDs, atomically save one or more user-approved mappings, override a model protocol, and persistently exclude/include one or more relay models. This tool never accepts or exposes API keys; authentication must use /login.",
+			"Configure mixed-protocol relay providers, remove providers and their stored state, sync model IDs, inspect unmatched IDs, atomically save one or more user-approved mappings, remove mappings, clear protocol overrides, and persistently exclude/include one or more relay models. This tool never accepts or exposes API keys; authentication must use /login.",
 		promptSnippet: "Configure and review OpenAI/Anthropic relay model providers without exposing API keys",
 		promptGuidelines: [
 			"Use relay_models when the user asks to add, remove, or inspect an OpenAI/Anthropic-compatible relay provider.",
 			"After relay_models add, tell the user to run the returned /login command; never ask the user to paste an API key into chat.",
-			"Before calling relay_models with action=map, action=protocol, action=exclude, or action=remove, show every proposed change and obtain explicit user approval.",
+			"Before calling relay_models with action=map, action=unmap, action=protocol, action=clear, action=exclude, or action=remove, show every proposed change and obtain explicit user approval.",
 		],
+		renderResult(result, { expanded, isPartial }, theme) {
+			if (isPartial) return new Text(theme.fg("warning", "Working…"), 0, 0);
+			const fullText = result.content
+				.filter((block) => block.type === "text")
+				.map((block) => block.text)
+				.join("\n");
+			const preview = relayToolResultPreview(fullText, expanded);
+			const hint =
+				preview.remaining > 0
+					? `\n${theme.fg("muted", `... (${preview.remaining} more lines • `)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`
+					: "";
+			return new Text(theme.fg("toolOutput", preview.text) + hint, 0, 0);
+		},
 		parameters: Type.Object({
-			action: StringEnum(["add", "remove", "sync", "status", "map", "protocol", "exclude", "include"] as const),
+			action: StringEnum(["add", "remove", "sync", "status", "map", "unmap", "protocol", "clear", "exclude", "include"] as const),
 			baseUrl: Type.Optional(Type.String({ description: "Relay Base URL for action=add" })),
 			protocol: Type.Optional(
 				StringEnum(["openai-completions", "openai-responses", "anthropic-messages"] as const, {
@@ -661,7 +746,7 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 			remoteModelId: Type.Optional(Type.String({ description: "Single remote model ID" })),
 			remoteModelIds: Type.Optional(
 				Type.Array(Type.String(), {
-					description: "Remote model IDs to exclude/include in one operation",
+					description: "Remote model IDs for unmap/clear/exclude/include in one operation",
 					minItems: 1,
 					uniqueItems: true,
 				}),
@@ -705,8 +790,14 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 				case "map":
 					result = await mapRelayModels(pi, params, ctx);
 					break;
+				case "unmap":
+					result = await unmapRelayModels(pi, params, ctx);
+					break;
 				case "protocol":
 					result = await setRelayModelProtocol(pi, params, ctx);
+					break;
+				case "clear":
+					result = await clearRelayProtocols(pi, params, ctx);
 					break;
 				case "exclude":
 					result = await setRelayModelExclusion(pi, params, true, ctx);

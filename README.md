@@ -80,11 +80,13 @@ pi -e npm:pi-relay-models
 | `sync` | 刷新模型并匹配官方元信息 |
 | `status` | 查看供应商、匹配和路由状态 |
 | `map` | 保存人工确认的官方元信息映射 |
+| `unmap` | 删除一个或多个官方元信息映射 |
 | `protocol` | 覆盖单个模型的协议 |
+| `clear` | 清除一个或多个模型的协议覆盖，恢复自动路由 |
 | `exclude` | 持久排除一个或多个模型 |
 | `include` | 恢复一个或多个已排除模型 |
 
-`exclude` 和 `include` 可使用 `remoteModelId` 操作单个模型，或使用 `remoteModelIds` 数组批量操作。批量操作只保存一次配置并刷新一次模型列表；原有单模型参数保持兼容。
+`unmap`、`clear`、`exclude` 和 `include` 可使用 `remoteModelId` 操作单个模型，或使用 `remoteModelIds` 数组批量操作。`unmap` 只删除官方元信息映射，`clear` 只删除协议覆盖；清除后分别恢复未映射模型的默认元信息或自动协议推断。批量操作只保存一次配置并刷新一次模型列表。
 
 `map` 既支持原有的单模型参数，也支持通过 `mappings` 数组原子化批量映射。顶层 `protocol` 会作为整批默认协议，每个映射也可以单独覆盖：
 
@@ -111,7 +113,9 @@ pi -e npm:pi-relay-models
 
 扩展会先验证整批映射和所有官方模型引用；任一项无效时不会写入配置。验证通过后只保存一次并刷新一次。
 
-`map`、`protocol`、`exclude` 和 `remove` 属于持久配置变更，AI 工具说明要求在调用前展示所有变更并取得用户明确确认。`remove` 需要 `providerId`，并且只能删除由本扩展管理的中转站。
+`map`、`unmap`、`protocol`、`clear`、`exclude` 和 `remove` 属于持久配置变更，AI 工具说明要求在调用前展示所有变更并取得用户明确确认。`unmap` 和 `clear` 需要 `providerId` 及至少一个远端模型 ID；`remove` 只能删除由本扩展管理的中转站。
+
+`relay_models` 的终端结果默认只显示前 8 行，并追加剩余行数和展开提示，避免完整状态 JSON 刷屏；使用 pi 的工具输出展开快捷键（默认 `Ctrl+O`）可查看完整结构化结果。
 
 ## 混合协议路由
 

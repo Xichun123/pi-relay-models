@@ -80,11 +80,13 @@ The extension also registers a `relay_models` AI tool with these actions:
 | `sync` | Refresh models and match official metadata |
 | `status` | Inspect provider, matching, and routing status |
 | `map` | Save a user-approved official metadata mapping |
+| `unmap` | Remove one or more official metadata mappings |
 | `protocol` | Override one model's protocol |
+| `clear` | Clear one or more protocol overrides and restore automatic routing |
 | `exclude` | Persistently exclude one or more models |
 | `include` | Restore one or more excluded models |
 
-`exclude` and `include` accept `remoteModelId` for one model or a `remoteModelIds` array for a batch. A batch saves the configuration and refreshes the model list only once; the existing single-model parameter remains compatible.
+`unmap`, `clear`, `exclude`, and `include` accept `remoteModelId` for one model or a `remoteModelIds` array for a batch. `unmap` removes only official metadata mappings, while `clear` removes only protocol overrides; each operation restores the corresponding automatic behavior. A batch saves the configuration and refreshes the model list only once.
 
 `map` supports both the existing single-model fields and an atomic `mappings` batch. A top-level `protocol` acts as the batch default, while each mapping may override it:
 
@@ -111,7 +113,9 @@ The extension also registers a `relay_models` AI tool with these actions:
 
 The extension validates the entire batch and every official model reference before mutation. If any entry is invalid, nothing is saved; otherwise the configuration is saved and the model list is refreshed only once.
 
-`map`, `protocol`, `exclude`, and `remove` are persistent changes. The tool instructions require every proposed change to be shown and explicitly approved before invocation. `remove` requires `providerId` and only removes relay providers managed by this extension.
+`map`, `unmap`, `protocol`, `clear`, `exclude`, and `remove` are persistent changes. The tool instructions require every proposed change to be shown and explicitly approved before invocation. `unmap` and `clear` require `providerId` plus at least one remote model ID; `remove` only removes relay providers managed by this extension.
+
+Terminal output from `relay_models` shows only the first eight lines plus a remaining-line expansion hint by default to avoid flooding the screen. Use pi's tool-output expansion shortcut (`Ctrl+O` by default) to view the complete structured result.
 
 ## Mixed-protocol routing
 
