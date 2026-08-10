@@ -159,8 +159,9 @@ test("copies official metadata while replacing routing fields", () => {
 		thinkingLevelMap: { high: "high" },
 	});
 	const result = materializeRelayModels(relay, ["gpt-x"], [official]);
-	assert.equal(result.matched, 1);
-	assert.deepEqual(result.unmatched, []);
+	assert.deepEqual(result.matches, [
+		{ remoteModelId: "gpt-x", metadataSource: { provider: "openai", id: "gpt-x" } },
+	]);
 	assert.deepEqual(result.models[0], {
 		...official,
 		provider: "my-relay",
@@ -179,7 +180,12 @@ test("uses a user-approved mapping while preserving the relay model ID", () => {
 		["claude-sonnet-latest"],
 		[official],
 	);
-	assert.equal(result.matched, 1);
+	assert.deepEqual(result.matches, [
+		{
+			remoteModelId: "claude-sonnet-latest",
+			metadataSource: { provider: "anthropic", id: "claude-sonnet-4-6" },
+		},
+	]);
 	assert.equal(result.models[0]?.id, "claude-sonnet-latest");
 	assert.equal(result.models[0]?.name, "Claude Sonnet 4.6");
 	assert.equal(result.models[0]?.api, "anthropic-messages");
@@ -276,7 +282,7 @@ test("persistently excludes configured relay model IDs during materialization", 
 		[official],
 	);
 	assert.deepEqual(result.models.map((entry) => entry.id), ["keep-me"]);
-	assert.deepEqual(result.unmatched, ["keep-me"]);
+	assert.deepEqual(result.matches, []);
 });
 
 test("prefers direct official provider and supplies safe fallback metadata", () => {
@@ -286,5 +292,7 @@ test("prefers direct official provider and supplies safe fallback metadata", () 
 	assert.equal(result.models[0]?.name, "Direct");
 	assert.equal(result.models[1]?.name, "unknown-id");
 	assert.equal(result.models[1]?.reasoning, false);
-	assert.deepEqual(result.unmatched, ["unknown-id"]);
+	assert.deepEqual(result.matches, [
+		{ remoteModelId: "same-id", metadataSource: { provider: "openai", id: "same-id" } },
+	]);
 });

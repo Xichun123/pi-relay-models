@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.5.0 - 2026-08-10
+
+- Replace count-only relay match reports with `matchedModels` and `unmatchedModels` entries that expose every model ID, metadata source, effective protocol, and unmatched candidates.
+- Render `status` and `sync` as a compact model-oriented preview so up to 12 model routes are visible without expanding the full JSON result.
+- Enforce Pi's standard 2,000-line/50KB tool-content limit, persist oversized full results to a temporary JSON file, and keep complete details available through explicit terminal expansion.
+
 ## 0.4.0 - 2026-08-07
 
 - Add `relay_models action=unmap` for removing selected metadata mappings and `action=clear` for removing selected protocol overrides, with single-model and batch support.

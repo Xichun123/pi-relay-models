@@ -1,4 +1,5 @@
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
 	anthropicMessagesApi,
@@ -13,7 +14,16 @@ import {
 	type Provider,
 	StringEnum,
 } from "@earendil-works/pi-ai/compat";
-import { getAgentDir, keyHint, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	formatSize,
+	getAgentDir,
+	keyHint,
+	truncateHead,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
@@ -39,12 +49,34 @@ interface ConfigFile {
 	providers: RelayConfig[];
 }
 
+interface SyncedModelStatus {
+	id: string;
+	protocol: RelayProtocol;
+	metadataSource?: string;
+}
+
 interface SyncStatus {
-	modelCount: number;
-	matched: number;
-	unmatched: string[];
-	protocols: Record<RelayProtocol, number>;
+	models: SyncedModelStatus[];
 	updatedAt: number;
+}
+
+interface RelayReport {
+	providerId: string;
+	displayName: string;
+	baseUrl: string;
+	fallbackProtocol: RelayProtocol;
+	modelCount?: number;
+	matchedModels: Array<SyncedModelStatus & { metadataSource: string }>;
+	unmatchedModels: Array<SyncedModelStatus & { candidates: ReturnType<typeof suggestOfficialCandidates> }>;
+	protocols?: Record<RelayProtocol, number>;
+	syncedAt?: string;
+	mappings: NonNullable<RelayConfig["modelMappings"]>;
+	protocolOverrides: NonNullable<RelayConfig["protocolOverrides"]>;
+	excludedModels: string[];
+	headerProfiles: {
+		claude: boolean;
+		codex: boolean;
+	};
 }
 
 const AGENT_DIR = getAgentDir();
@@ -166,19 +198,18 @@ function makeProvider(config: RelayConfig): Provider<Api> {
 					return headers ? { ...model, headers: { ...(model.headers ?? {}), ...headers } } : model;
 				}),
 			};
-			const protocols: Record<RelayProtocol, number> = {
-				"openai-completions": 0,
-				"openai-responses": 0,
-				"anthropic-messages": 0,
-			};
-			for (const model of result.models) {
-				if (isRelayProtocol(model.api)) protocols[model.api] += 1;
-			}
+			const metadataSources = new Map(
+				result.matches.map((match) => [
+					match.remoteModelId,
+					`${match.metadataSource.provider}/${match.metadataSource.id}`,
+				]),
+			);
 			syncStatuses.set(config.id, {
-				modelCount: result.models.length,
-				matched: result.matched,
-				unmatched: result.unmatched,
-				protocols,
+				models: result.models.map((model) => {
+					if (!isRelayProtocol(model.api)) throw new Error(`Unsupported relay model protocol: ${model.api}`);
+					const metadataSource = metadataSources.get(model.id);
+					return { id: model.id, protocol: model.api, ...(metadataSource ? { metadataSource } : {}) };
+				}),
 				updatedAt: Date.now(),
 			});
 			return result.models;
@@ -292,6 +323,7 @@ function protocolDescription(protocol: RelayProtocol): string {
 }
 
 const RELAY_TOOL_COLLAPSED_LINES = 8;
+const RELAY_STATUS_PREVIEW_MODELS = 12;
 
 function relayToolResultPreview(fullText: string, expanded: boolean): { text: string; remaining: number } {
 	const lines = fullText.replace(/\r/gu, "").split("\n");
@@ -302,24 +334,93 @@ function relayToolResultPreview(fullText: string, expanded: boolean): { text: st
 	};
 }
 
-function relayReports(providerId?: string) {
+async function relayToolContent(result: unknown): Promise<string> {
+	const fullText = JSON.stringify(result, null, 2) ?? "null";
+	const truncation = truncateHead(fullText, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+	if (!truncation.truncated) return fullText;
+
+	const outputDir = await mkdtemp(join(tmpdir(), "pi-relay-models-"));
+	const outputPath = join(outputDir, "result.json");
+	await writeFile(outputPath, `${fullText}\n`, { encoding: "utf8", mode: 0o600 });
+	return `${truncation.content}\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). Full output saved to: ${outputPath}]`;
+}
+
+function isRelayReportList(value: unknown): value is RelayReport[] {
+	return (
+		Array.isArray(value) &&
+		value.every(
+			(report) =>
+				report !== null &&
+				typeof report === "object" &&
+				typeof (report as Partial<RelayReport>).providerId === "string" &&
+				Array.isArray((report as Partial<RelayReport>).matchedModels) &&
+				Array.isArray((report as Partial<RelayReport>).unmatchedModels),
+		)
+	);
+}
+
+function relayStatusResultPreview(reports: readonly RelayReport[]): { text: string; remaining: number } {
+	if (reports.length === 0) return { text: "No relay providers configured.", remaining: 0 };
+
+	const lines: string[] = [];
+	let displayedModels = 0;
+	let remaining = 0;
+	for (const report of reports) {
+		lines.push(`${report.providerId} (${report.displayName})`);
+		if (report.modelCount === undefined) {
+			lines.push(`  not synced; run /login ${report.providerId}`);
+			continue;
+		}
+		lines.push(
+			`  ${report.modelCount} models • ${report.matchedModels.length} matched • ${report.unmatchedModels.length} unmatched`,
+		);
+		const modelLines = [
+			...report.matchedModels.map(
+				(model) => `  ✓ ${model.id} → ${model.metadataSource} (${model.protocol})`,
+			),
+			...report.unmatchedModels.map((model) => `  ? ${model.id} (${model.protocol})`),
+		];
+		for (const line of modelLines) {
+			if (displayedModels < RELAY_STATUS_PREVIEW_MODELS) {
+				lines.push(line);
+				displayedModels += 1;
+			} else {
+				remaining += 1;
+			}
+		}
+	}
+	return { text: lines.join("\n"), remaining };
+}
+
+function relayReports(providerId?: string): RelayReport[] {
 	return configFile.providers
 		.filter((config) => !providerId || config.id === providerId)
 		.map((config) => {
 			const status = syncStatuses.get(config.id);
-			const unmatched = status?.unmatched ?? [];
+			const models = status?.models ?? [];
+			const protocols: Record<RelayProtocol, number> = {
+				"openai-completions": 0,
+				"openai-responses": 0,
+				"anthropic-messages": 0,
+			};
+			for (const model of models) protocols[model.protocol] += 1;
+			const matchedModels = models.flatMap((model) =>
+				model.metadataSource ? [{ ...model, metadataSource: model.metadataSource }] : [],
+			);
+			const unmatchedModels = models.flatMap((model) =>
+				model.metadataSource
+					? []
+					: [{ ...model, candidates: suggestOfficialCandidates(model.id, officialCatalog) }],
+			);
 			return {
 				providerId: config.id,
 				displayName: config.name,
 				baseUrl: config.baseUrl,
-				protocol: config.protocol,
-				modelCount: status?.modelCount,
-				matched: status?.matched,
-				protocols: status?.protocols,
-				unmatched,
-				candidates: Object.fromEntries(
-					unmatched.map((modelId) => [modelId, suggestOfficialCandidates(modelId, officialCatalog)]),
-				),
+				fallbackProtocol: config.protocol,
+				modelCount: status?.models.length,
+				matchedModels,
+				unmatchedModels,
+				...(status ? { protocols, syncedAt: new Date(status.updatedAt).toISOString() } : {}),
 				mappings: config.modelMappings ?? {},
 				protocolOverrides: config.protocolOverrides ?? {},
 				excludedModels: config.excludedModels ?? [],
@@ -658,7 +759,8 @@ function listRelays(ctx: ExtensionCommandContext): void {
 
 	const lines = configFile.providers.map((config) => {
 		const status = syncStatuses.get(config.id);
-		const suffix = status ? ` — ${status.modelCount} models, ${status.matched} metadata matches` : " — not synced this run";
+		const matched = status?.models.filter((model) => model.metadataSource).length;
+		const suffix = status ? ` — ${status.models.length} models, ${matched} metadata matches` : " — not synced this run";
 		return `${config.id} (mixed; fallback ${protocolDescription(config.protocol)})${suffix}`;
 	});
 	ctx.ui.notify(lines.join("\n"), "info");
@@ -682,11 +784,12 @@ async function syncRelays(ctx: ExtensionCommandContext): Promise<void> {
 						.map(([protocol, count]) => `${protocol}=${count}`)
 						.join(", ")
 				: "";
-			const summary = `${report.providerId}: ${report.modelCount} models, ${report.matched} matched, ${report.unmatched.length} unmatched${routes ? `; ${routes}` : ""}`;
-			const unmatched = report.unmatched.slice(0, 20).map((id) => {
-				const candidates = report.candidates[id] ?? [];
-				const hint = candidates[0] ? ` → maybe ${candidates[0].provider}/${candidates[0].id}` : "";
-				return `  - ${id}${hint}`;
+			const summary = `${report.providerId}: ${report.modelCount} models, ${report.matchedModels.length} matched, ${report.unmatchedModels.length} unmatched${routes ? `; ${routes}` : ""}`;
+			const unmatched = report.unmatchedModels.slice(0, 20).map((model) => {
+				const hint = model.candidates[0]
+					? ` → maybe ${model.candidates[0].provider}/${model.candidates[0].id}`
+					: "";
+				return `  - ${model.id}${hint}`;
 			});
 			return [summary, ...unmatched];
 		});
@@ -713,7 +816,7 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 		name: "relay_models",
 		label: "Relay Models",
 		description:
-			"Configure mixed-protocol relay providers, remove providers and their stored state, sync model IDs, inspect unmatched IDs, atomically save one or more user-approved mappings, remove mappings, clear protocol overrides, and persistently exclude/include one or more relay models. This tool never accepts or exposes API keys; authentication must use /login.",
+			`Configure mixed-protocol relay providers, remove providers and their stored state, sync model IDs, inspect unmatched IDs, atomically save one or more user-approved mappings, remove mappings, clear protocol overrides, and persistently exclude/include one or more relay models. This tool never accepts or exposes API keys; authentication must use /login. Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}; full results are saved to a temporary file when truncated.`,
 		promptSnippet: "Configure and review OpenAI/Anthropic relay model providers without exposing API keys",
 		promptGuidelines: [
 			"Use relay_models when the user asks to add, remove, or inspect an OpenAI/Anthropic-compatible relay provider.",
@@ -722,14 +825,21 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 		],
 		renderResult(result, { expanded, isPartial }, theme) {
 			if (isPartial) return new Text(theme.fg("warning", "Working…"), 0, 0);
-			const fullText = result.content
+			const contentText = result.content
 				.filter((block) => block.type === "text")
 				.map((block) => block.text)
 				.join("\n");
-			const preview = relayToolResultPreview(fullText, expanded);
+			const details = result.details;
+			const fullText = expanded ? (JSON.stringify(details, null, 2) ?? contentText) : contentText;
+			const statusReports = !expanded && isRelayReportList(details) ? details : undefined;
+			const isStatusPreview = statusReports !== undefined;
+			const preview = statusReports
+				? relayStatusResultPreview(statusReports)
+				: relayToolResultPreview(fullText, expanded);
+			const remainingUnit = isStatusPreview ? "models" : "lines";
 			const hint =
 				preview.remaining > 0
-					? `\n${theme.fg("muted", `... (${preview.remaining} more lines • `)}${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`
+					? `\n${theme.fg("muted", `... (${preview.remaining} more ${remainingUnit} • `)}${keyHint("app.tools.expand", "for full details")}${theme.fg("muted", ")")}`
 					: "";
 			return new Text(theme.fg("toolOutput", preview.text) + hint, 0, 0);
 		},
@@ -809,7 +919,7 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 					result = relayReports(params.providerId);
 			}
 			return {
-				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				content: [{ type: "text", text: await relayToolContent(result) }],
 				details: result,
 			};
 		},

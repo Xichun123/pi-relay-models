@@ -56,6 +56,9 @@ test("unmap removes selected mappings and clear restores automatic protocols", a
 			getAll() {
 				return [];
 			},
+			getProvider() {
+				return undefined;
+			},
 			getRegisteredProviderIds() {
 				return [];
 			},
@@ -117,7 +120,7 @@ test("unmap removes selected mappings and clear restores automatic protocols", a
 		{ args: { action: "clear" } },
 	).render(200);
 	assert.equal(collapsed.length, 9);
-	assert.match(collapsed[8] ?? "", /more lines.*to expand/u);
+	assert.match(collapsed[8] ?? "", /more lines.*full details/u);
 
 	const expanded = tool.renderResult(
 		clear,
@@ -126,6 +129,83 @@ test("unmap removes selected mappings and clear restores automatic protocols", a
 		{ args: { action: "clear" } },
 	).render(200);
 	assert.ok(expanded.length > collapsed.length);
-	assert.doesNotMatch(expanded.join("\n"), /more lines.*to expand/u);
+	assert.doesNotMatch(expanded.join("\n"), /more lines.*full details/u);
 	assert.match(expanded.join("\n"), /"protocolOverrides": \{\}/u);
+
+	const matchedModels = Array.from({ length: 6 }, (_, index) => ({
+		id: `model-${index + 1}`,
+		protocol: "openai-responses",
+		metadataSource: `openai/model-${index + 1}`,
+	}));
+	const statusReport = [
+		{
+			providerId: "relay-clear",
+			displayName: "Clear Relay",
+			baseUrl: "https://clear.example/v1",
+			fallbackProtocol: "openai-completions",
+			modelCount: 6,
+			matchedModels,
+			unmatchedModels: [],
+			protocols: { "openai-completions": 0, "openai-responses": 6, "anthropic-messages": 0 },
+			syncedAt: "2026-08-10T00:00:00.000Z",
+			mappings: {},
+			protocolOverrides: {},
+			excludedModels: [],
+			headerProfiles: { claude: false, codex: false },
+		},
+	];
+	const statusResult = {
+		content: [{ type: "text", text: JSON.stringify(statusReport, null, 2) }],
+		details: statusReport,
+	};
+	const statusPreview = tool.renderResult(
+		statusResult,
+		{ expanded: false, isPartial: false },
+		theme,
+		{ args: { action: "status" } },
+	).render(200);
+	assert.match(statusPreview.join("\n"), /6 models.*6 matched.*0 unmatched/u);
+	for (const model of matchedModels) {
+		assert.match(statusPreview.join("\n"), new RegExp(`${model.id}.*${model.metadataSource}`, "u"));
+	}
+	assert.doesNotMatch(statusPreview.join("\n"), /more models.*full details/u);
+
+	const overflowModels = Array.from({ length: 13 }, (_, index) => ({
+		id: `overflow-${index + 1}`,
+		protocol: "openai-responses",
+		metadataSource: `openai/overflow-${index + 1}`,
+	}));
+	const overflowReport = [{ ...statusReport[0], modelCount: 13, matchedModels: overflowModels }];
+	const overflowPreview = tool.renderResult(
+		{
+			content: [{ type: "text", text: JSON.stringify(overflowReport, null, 2) }],
+			details: overflowReport,
+		},
+		{ expanded: false, isPartial: false },
+		theme,
+		{ args: { action: "status" } },
+	).render(200);
+	assert.match(overflowPreview.join("\n"), /overflow-12/u);
+	assert.doesNotMatch(overflowPreview.join("\n"), /overflow-13/u);
+	assert.match(overflowPreview.join("\n"), /1 more models.*full details/u);
+
+	const oversized = await tool.execute(
+		"call-oversized",
+		{
+			action: "add",
+			providerId: "relay-oversized",
+			displayName: "x".repeat(60_000),
+			baseUrl: "https://oversized.example/v1",
+			protocol: "openai-completions",
+		},
+		undefined,
+		undefined,
+		ctx,
+	);
+	const oversizedText = oversized.content[0]?.text ?? "";
+	assert.ok(Buffer.byteLength(oversizedText, "utf8") < 52 * 1024);
+	assert.match(oversizedText, /Output truncated: showing/u);
+	const outputPath = oversizedText.match(/Full output saved to: (.+)\]/u)?.[1];
+	assert.ok(outputPath);
+	assert.match(await readFile(outputPath, "utf8"), /"providerId"|"id": "relay-oversized"/u);
 });

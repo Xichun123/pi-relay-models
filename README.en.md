@@ -115,7 +115,9 @@ The extension validates the entire batch and every official model reference befo
 
 `map`, `unmap`, `protocol`, `clear`, `exclude`, and `remove` are persistent changes. The tool instructions require every proposed change to be shown and explicitly approved before invocation. `unmap` and `clear` require `providerId` plus at least one remote model ID; `remove` only removes relay providers managed by this extension.
 
-Terminal output from `relay_models` shows only the first eight lines plus a remaining-line expansion hint by default to avoid flooding the screen. Use pi's tool-output expansion shortcut (`Ctrl+O` by default) to view the complete structured result.
+Collapsed `status` and `sync` results show the provider summary and up to 12 models directly. Matched models include their official metadata source and effective protocol; unmatched models include their fallback protocol. Use pi's tool-output expansion shortcut (`Ctrl+O` by default) to see additional models and the complete structured result. Other actions still show an eight-line preview with an expansion hint.
+
+Status reports return per-model details in `matchedModels` and `unmatchedModels` arrays instead of a match count alone. Each `matchedModels` entry includes the remote model ID, official metadata source, and effective protocol; `unmatchedModels` entries also include suggested official candidates. Tool content sent to the model follows Pi's 2,000-line/50KB limit; oversized results are saved as temporary JSON with the path included in the result, while explicit terminal expansion still renders the complete structure.
 
 ## Mixed-protocol routing
 

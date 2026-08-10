@@ -39,8 +39,10 @@ export interface ModelCandidate extends OfficialModelRef {
 
 export interface RelayModelResponse {
 	models: Model<Api>[];
-	matched: number;
-	unmatched: string[];
+	matches: Array<{
+		remoteModelId: string;
+		metadataSource: OfficialModelRef;
+	}>;
 }
 
 export interface SpoofHeaderProfiles {
@@ -361,8 +363,7 @@ export function materializeRelayModels(
 	const index = buildCatalogIndex(catalog);
 	const byReference = new Map(catalog.map((model) => [`${model.provider}/${model.id}`, model]));
 	const models: Model<Api>[] = [];
-	const unmatched: string[] = [];
-	let matched = 0;
+	const matches: RelayModelResponse["matches"] = [];
 
 	const excluded = new Set(config.excludedModels ?? []);
 	for (const id of [...new Set(modelIds.map((value) => value.trim()).filter(Boolean))].filter((value) => !excluded.has(value))) {
@@ -370,12 +371,14 @@ export function materializeRelayModels(
 		const source = mapping ? byReference.get(`${mapping.provider}/${mapping.id}`) : index.get(id);
 		if (source) {
 			models.push(copyOfficialModel(config, id, source));
-			matched += 1;
+			matches.push({
+				remoteModelId: id,
+				metadataSource: { provider: source.provider, id: source.id },
+			});
 		} else {
 			models.push(fallbackModel(config, id));
-			unmatched.push(id);
 		}
 	}
 
-	return { models, matched, unmatched };
+	return { models, matches };
 }
