@@ -687,18 +687,25 @@ async function addRelay(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise
 		ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 		return;
 	}
+	const protocolChoices: RelayProtocol[] = managed?.protocol
+		? [managed.protocol, ...(["openai-completions", "anthropic-messages", "openai-responses"] as const).filter((p) => p !== managed.protocol)]
+		: ["openai-completions", "anthropic-messages", "openai-responses"];
+	const selectedProtocol = await ctx.ui.select("Fallback protocol", protocolChoices);
+	if (!selectedProtocol) return;
+	const protocol = selectedProtocol as RelayProtocol;
+
 	const config: RelayConfig = {
 		id,
 		name: rawName.trim() || id,
 		baseUrl,
-		protocol: managed?.protocol ?? "openai-completions",
+		protocol,
 		...(managed?.modelMappings ? { modelMappings: managed.modelMappings } : {}),
 		...(managed?.protocolOverrides ? { protocolOverrides: managed.protocolOverrides } : {}),
 		...(managed?.excludedModels ? { excludedModels: managed.excludedModels } : {}),
 	};
 	const confirmed = await ctx.ui.confirm(
 		managed ? "Update relay provider?" : "Add relay provider?",
-		`${config.name}\n${config.baseUrl}\nMixed protocols (auto-selected per model)`,
+		`${config.name}\n${config.baseUrl}\n${protocolDescription(config.protocol)} (mixed protocols auto-selected per model)`,
 	);
 	if (!confirmed) return;
 

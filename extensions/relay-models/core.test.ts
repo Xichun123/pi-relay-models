@@ -46,6 +46,14 @@ test("normalizes URLs and builds model endpoint candidates", () => {
 		"https://relay.example/models",
 		"https://relay.example/v1/models",
 	]);
+	assert.deepEqual(
+		getModelsEndpointCandidates("https://relay.example", "anthropic-messages"),
+		["https://relay.example/v1/models", "https://relay.example/models"],
+	);
+	assert.deepEqual(
+		getModelsEndpointCandidates("https://relay.example/v1", "anthropic-messages"),
+		["https://relay.example/v1/models"],
+	);
 	assert.equal(
 		normalizeBaseUrlForProtocol("https://relay.example/anthropic/v1", "anthropic-messages"),
 		"https://relay.example/anthropic",
@@ -134,6 +142,64 @@ test("fetches OpenAI-compatible model IDs with endpoint fallback and bearer auth
 		if (!address || typeof address === "string") throw new Error("Expected TCP server address");
 		const ids = await fetchModelIds({ ...relay, baseUrl: `http://127.0.0.1:${address.port}` }, "secret-key");
 		assert.deepEqual(ids, ["gpt-x"]);
+		assert.deepEqual(paths, ["/models", "/v1/models"]);
+	} finally {
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	}
+});
+
+test("fetches Anthropic-compatible model IDs with /v1/models and anthropic headers", async () => {
+	const paths: string[] = [];
+	let receivedAuth = "";
+	let receivedApiKey = "";
+	let receivedVersion = "";
+	const server = createServer((request, response) => {
+		paths.push(request.url ?? "");
+		receivedAuth = request.headers.authorization ?? "";
+		receivedApiKey = (request.headers["x-api-key"] as string) ?? "";
+		receivedVersion = (request.headers["anthropic-version"] as string) ?? "";
+		response.setHeader("content-type", "application/json");
+		response.end(JSON.stringify({ data: [{ id: "claude-sonnet-4-6" }] }));
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	try {
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+		const ids = await fetchModelIds(
+			{ ...relay, protocol: "anthropic-messages", baseUrl: `http://127.0.0.1:${address.port}` },
+			"anthropic-secret-key",
+		);
+		assert.deepEqual(ids, ["claude-sonnet-4-6"]);
+		assert.deepEqual(paths, ["/v1/models"]);
+		assert.equal(receivedApiKey, "anthropic-secret-key");
+		assert.equal(receivedVersion, "2023-06-01");
+		assert.equal(receivedAuth, "Bearer anthropic-secret-key");
+	} finally {
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	}
+});
+
+test("falls back to next candidate when endpoint returns HTML instead of JSON", async () => {
+	const paths: string[] = [];
+	const server = createServer((request, response) => {
+		paths.push(request.url ?? "");
+		if (request.url === "/models") {
+			response.setHeader("content-type", "text/html; charset=utf-8");
+			response.writeHead(200).end("<!DOCTYPE html><html><body>Showcase</body></html>");
+			return;
+		}
+		response.setHeader("content-type", "application/json");
+		response.end(JSON.stringify({ data: [{ id: "claude-opus-5" }] }));
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	try {
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+		const ids = await fetchModelIds(
+			{ ...relay, baseUrl: `http://127.0.0.1:${address.port}` },
+			"secret-key",
+		);
+		assert.deepEqual(ids, ["claude-opus-5"]);
 		assert.deepEqual(paths, ["/models", "/v1/models"]);
 	} finally {
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));

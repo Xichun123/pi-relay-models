@@ -173,10 +173,16 @@ export function suggestProviderIdentity(rawBaseUrl: string, existingIds: Readonl
 	return { id, name: `${readable || "Model"} Relay` };
 }
 
-export function getModelsEndpointCandidates(baseUrl: string): string[] {
+export function getModelsEndpointCandidates(baseUrl: string, protocol?: RelayProtocol): string[] {
 	const normalized = normalizeBaseUrl(baseUrl);
 	const parsed = new URL(normalized);
 	const path = parsed.pathname.replace(/\/$/u, "");
+	if (protocol === "anthropic-messages") {
+		const candidates = path.endsWith("/v1")
+			? [`${normalized}/models`]
+			: [`${normalized}/v1/models`, `${normalized}/models`];
+		return [...new Set(candidates)];
+	}
 	const candidates = [`${normalized}/models`];
 	if (!path.endsWith("/v1")) candidates.push(`${normalized}/v1/models`);
 	return [...new Set(candidates)];
@@ -207,14 +213,16 @@ export function parseModelIds(payload: unknown): string[] {
 }
 
 function authHeaders(protocol: RelayProtocol, apiKey: string): Record<string, string> {
+	const trimmedKey = apiKey.trim();
 	if (protocol === "anthropic-messages") {
 		return {
 			accept: "application/json",
 			"anthropic-version": "2023-06-01",
-			"x-api-key": apiKey,
+			"x-api-key": trimmedKey,
+			authorization: `Bearer ${trimmedKey}`,
 		};
 	}
-	return { accept: "application/json", authorization: `Bearer ${apiKey}` };
+	return { accept: "application/json", authorization: `Bearer ${trimmedKey}` };
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -223,16 +231,32 @@ async function responseError(response: Response): Promise<string> {
 }
 
 export async function fetchModelIds(config: RelayConfig, apiKey: string, signal?: AbortSignal): Promise<string[]> {
-	const candidates = getModelsEndpointCandidates(config.baseUrl);
+	const candidates = getModelsEndpointCandidates(config.baseUrl, config.protocol);
 	let lastError = "";
 
 	for (let index = 0; index < candidates.length; index += 1) {
 		const endpoint = candidates[index]!;
-		const response = await fetch(endpoint, { headers: authHeaders(config.protocol, apiKey), signal });
-		if (response.ok) return parseModelIds(await response.json());
+		try {
+			const response = await fetch(endpoint, {
+				headers: authHeaders(config.protocol, apiKey),
+				signal,
+			});
 
-		lastError = `${endpoint}: ${await responseError(response)}`;
-		if (response.status !== 404 && response.status !== 405) break;
+			if (response.ok) {
+				const contentType = response.headers.get("content-type") ?? "";
+				if (contentType.includes("text/html")) {
+					lastError = `${endpoint}: received HTML instead of JSON`;
+					continue;
+				}
+				const data = await response.json();
+				return parseModelIds(data);
+			}
+
+			lastError = `${endpoint}: ${await responseError(response)}`;
+		} catch (error) {
+			if (signal?.aborted) throw error;
+			lastError = `${endpoint}: ${error instanceof Error ? error.message : String(error)}`;
+		}
 	}
 
 	throw new Error(`Unable to fetch relay model list (${lastError})`);
