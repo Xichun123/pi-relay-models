@@ -206,6 +206,70 @@ test("falls back to next candidate when endpoint returns HTML instead of JSON", 
 	}
 });
 
+test("releases HTML response streams before fallback or failure", async (t) => {
+	for (const hasFallback of [true, false]) {
+		await t.test(hasFallback ? "before fallback" : "without fallback", async (t) => {
+			let cancelled = false;
+			const html = new Response(
+				new ReadableStream({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("<!DOCTYPE html>"));
+					},
+					async cancel() {
+						await Promise.resolve();
+						cancelled = true;
+					},
+				}),
+				{ headers: { "content-type": "text/html" } },
+			);
+			const endpoints: string[] = [];
+			t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+				endpoints.push(String(input));
+				if (endpoints.length === 1) return html;
+				assert.ok(cancelled, "Release the HTML stream before requesting the next endpoint");
+				return Response.json({ data: [{ id: "gpt-x" }] });
+			});
+
+			const baseUrl = hasFallback ? "https://relay.example" : relay.baseUrl;
+			try {
+				if (hasFallback) {
+					assert.deepEqual(await fetchModelIds({ ...relay, baseUrl }, "secret-key"), ["gpt-x"]);
+					assert.deepEqual(endpoints, ["https://relay.example/models", "https://relay.example/v1/models"]);
+				} else {
+					await assert.rejects(fetchModelIds({ ...relay, baseUrl }, "secret-key"), /received HTML instead of JSON/u);
+					assert.deepEqual(endpoints, ["https://relay.example/v1/models"]);
+				}
+				assert.ok(cancelled, "Release the HTML stream even if no fallback is available");
+			} finally {
+				await html.body?.cancel();
+			}
+		});
+	}
+});
+
+test("preserves HTTP errors when later model endpoints also fail", async (t) => {
+	for (const status of [401, 403, 429]) {
+		await t.test(`preserves ${status} before 404`, async (t) => {
+			const endpoints: string[] = [];
+			t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+				endpoints.push(String(input));
+				return endpoints.length === 1
+					? Response.json({ error: "original failure" }, { status })
+					: new Response("not found", { status: 404 });
+			});
+
+			await assert.rejects(fetchModelIds({ ...relay, baseUrl: "https://relay.example" }, "secret-key"), (error: unknown) => {
+				assert.ok(error instanceof Error);
+				assert.ok(error.message.includes(`https://relay.example/models: ${status}`));
+				assert.match(error.message, /original failure/u);
+				assert.match(error.message, /https:\/\/relay\.example\/v1\/models: 404 not found/u);
+				return true;
+			});
+			assert.equal(endpoints.length, 2);
+		});
+	}
+});
+
 test("suggests close official model IDs for AI/user review", () => {
 	const catalog = [
 		model({ id: "claude-sonnet-4-6", provider: "anthropic", api: "anthropic-messages", name: "Claude Sonnet 4.6" }),

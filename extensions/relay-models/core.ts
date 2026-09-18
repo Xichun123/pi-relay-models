@@ -232,7 +232,7 @@ async function responseError(response: Response): Promise<string> {
 
 export async function fetchModelIds(config: RelayConfig, apiKey: string, signal?: AbortSignal): Promise<string[]> {
 	const candidates = getModelsEndpointCandidates(config.baseUrl, config.protocol);
-	let lastError = "";
+	const errors: string[] = [];
 
 	for (let index = 0; index < candidates.length; index += 1) {
 		const endpoint = candidates[index]!;
@@ -245,21 +245,22 @@ export async function fetchModelIds(config: RelayConfig, apiKey: string, signal?
 			if (response.ok) {
 				const contentType = response.headers.get("content-type") ?? "";
 				if (contentType.includes("text/html")) {
-					lastError = `${endpoint}: received HTML instead of JSON`;
+					errors.push(`${endpoint}: received HTML instead of JSON`);
+					await response.body?.cancel();
 					continue;
 				}
 				const data = await response.json();
 				return parseModelIds(data);
 			}
 
-			lastError = `${endpoint}: ${await responseError(response)}`;
+			errors.push(`${endpoint}: ${await responseError(response)}`);
 		} catch (error) {
 			if (signal?.aborted) throw error;
-			lastError = `${endpoint}: ${error instanceof Error ? error.message : String(error)}`;
+			errors.push(`${endpoint}: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
-	throw new Error(`Unable to fetch relay model list (${lastError})`);
+	throw new Error(`Unable to fetch relay model list (${errors.join("; ")})`);
 }
 
 function sourceRank(model: Model<Api>): number {
